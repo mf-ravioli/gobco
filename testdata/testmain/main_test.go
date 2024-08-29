@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// https://github.com/rillig/gobco/issues/4
+// https://github.com/mf-ravioli/gobco/issues/4
 
 // If the code to be instrumented already defines a TestMain function, gobco
 // instruments that function so that before calling os.Exit, the gobco results

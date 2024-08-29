@@ -1,7 +1,7 @@
 package pkgname_test
 
 import (
-	"github.com/rillig/gobco/testdata/pkgname"
+	"github.com/mf-ravioli/gobco/testdata/pkgname"
 	"testing"
 )
 

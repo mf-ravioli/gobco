@@ -10,7 +10,7 @@ go:
   - "1.16"
   - "1.x"
 
-go_import_path: github.com/rillig/gobco
+go_import_path: github.com/mf-ravioli/gobco
 
 install:
   - go get -d -t -v ./...

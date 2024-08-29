@@ -135,7 +135,7 @@ func typeSwitchStmtMixed(value interface{}) {
 	}
 }
 
-// https://github.com/rillig/gobco/issues/30
+// https://github.com/mf-ravioli/gobco/issues/30
 //
 // In nested switch statements, the inner switch statement must be
 // instrumented. Before 2023-10-07, the reference to the statement was not

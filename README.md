@@ -1,5 +1,5 @@
-[![Build Status](https://app.travis-ci.com/rillig/gobco.svg?branch=master)](https://app.travis-ci.com/github/rillig/gobco)
-[![codecov](https://codecov.io/gh/rillig/gobco/branch/master/graph/badge.svg)](https://codecov.io/gh/rillig/gobco)
+[![Build Status](https://app.travis-ci.com/mf-ravioli/gobco.svg?branch=master)](https://app.travis-ci.com/github/mf-ravioli/gobco)
+[![codecov](https://codecov.io/gh/mf-ravioli/gobco/branch/master/graph/badge.svg)](https://codecov.io/gh/mf-ravioli/gobco)
 
 # GOBCO - Golang Branch Coverage
 
@@ -15,13 +15,13 @@ Gobco also doesn't cover `select` statements.
 With go1.17 or later:
 
 ```text
-$ go install github.com/rillig/gobco@latest
+$ go install github.com/mf-ravioli/gobco@latest
 ```
 
 With go1.16:
 
 ```text
-$ go get github.com/rillig/gobco
+$ go get github.com/mf-ravioli/gobco
 ```
 
 Older go releases are not supported.
@@ -35,10 +35,10 @@ $ gobco
 ~~~
 
 The output typically looks like the following example, taken from package
-[github.com/rillig/pkglint](https://github.com/rillig/pkglint):
+[github.com/mf-ravioli/pkglint](https://github.com/mf-ravioli/pkglint):
 
 ```text
-ok  	github.com/rillig/pkglint/v23	29.648s
+ok  	github.com/mf-ravioli/pkglint/v23	29.648s
 
 Condition coverage: 8720/8840
 ...

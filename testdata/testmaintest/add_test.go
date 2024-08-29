@@ -1,7 +1,7 @@
 package add_test
 
 import (
-	add "github.com/rillig/gobco/testdata/testmaintest"
+	add "github.com/mf-ravioli/gobco/testdata/testmaintest"
 	"os"
 	"testing"
 )
