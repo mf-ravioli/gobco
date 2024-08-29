@@ -5,17 +5,15 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
-	"go/importer"
 	"go/parser"
 	"go/printer"
 	"go/token"
-	"go/types"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -40,14 +38,7 @@ type instrumenter struct {
 	coverTest   bool // also cover the test code
 	immediately bool // persist counts after each increment
 	listAll     bool // also list conditions that are covered
-	debugTypes  bool
-
-	fset *token.FileSet
-	pkg  map[*ast.Package]*types.Package
-	typ  map[ast.Expr]types.Type
-
-	// While instrumenting of a file, the current package.
-	typePkg *types.Package
+	fset        *token.FileSet
 
 	// Generates variable names that are unique per function.
 	varname int
@@ -92,7 +83,6 @@ func (i *instrumenter) instrument(srcDir, singleFile, dstDir string) bool {
 	// such as '//go:build 386' or '//go:embed'.
 	mode := parser.ParseComments
 	pkgsMap, err := parser.ParseDir(i.fset, srcDir, isRelevant, mode)
-	i.resolveTypes(pkgsMap)
 	ok(err)
 
 	pkgs := sortedPkgs(pkgsMap)
@@ -102,50 +92,12 @@ func (i *instrumenter) instrument(srcDir, singleFile, dstDir string) bool {
 
 	for _, pkg := range pkgs {
 		forEachFile(pkg, func(name string, file *ast.File) {
-			i.typePkg = i.pkg[pkg]
 			i.instrumentFile(name, file, dstDir)
 		})
 	}
-	i.writeGobcoFiles(dstDir, pkgs)
+
+	i.writeGobcoFiles(srcDir, dstDir, pkgs)
 	return true
-}
-
-func (i *instrumenter) resolveTypes(pkgsMap map[string]*ast.Package) {
-	imp := importer.ForCompiler(i.fset, "source", nil)
-	conf := types.Config{Importer: imp}
-	info := types.Info{
-		Types: make(map[ast.Expr]types.TypeAndValue),
-	}
-
-	rememberType := func(n ast.Node) bool {
-		expr, ok := n.(ast.Expr)
-		if !ok {
-			return true
-		}
-		tv, ok := info.Types[expr]
-		if !ok {
-			return true
-		}
-		i.typ[expr] = tv.Type
-		if i.debugTypes {
-			fmt.Printf("expression '%s' has type '%s'\n",
-				i.str(expr), tv.Type)
-		}
-		return true
-	}
-
-	for _, pkg := range pkgsMap {
-		var files []*ast.File
-		for _, file := range pkg.Files {
-			files = append(files, file)
-		}
-		typePkg, err := conf.Check(pkg.Name, i.fset, files, &info)
-		ok(err)
-		i.pkg[pkg] = typePkg
-		for _, f := range files {
-			ast.Inspect(f, rememberType)
-		}
-	}
 }
 
 func (i *instrumenter) instrumentFile(filename string, astFile *ast.File, dstDir string) {
@@ -540,7 +492,7 @@ func (i *instrumenter) callCover(expr ast.Expr, pos token.Pos, code string) ast.
 	idx := len(i.conds) - 1
 
 	gen := codeGenerator{pos}
-	return gen.callGobcoCover(idx, expr, i.typ[expr], i.typePkg)
+	return gen.callGobcoCover(idx, expr)
 }
 
 // strEql returns the string representation of (lhs == rhs).
@@ -623,7 +575,7 @@ var fixedTemplate string
 //go:embed templates/gobco_no_testmain_test.go
 var noTestMainTemplate string
 
-func (i *instrumenter) writeGobcoFiles(tmpDir string, pkgs []*ast.Package) {
+func (i *instrumenter) writeGobcoFiles(srcDir, tmpDir string, pkgs []*ast.Package) {
 	pkgname := pkgs[0].Name
 	fixPkgname := func(str string) string {
 		str = strings.TrimPrefix(str, "//go:build ignore\n// +build ignore\n\n")
@@ -636,7 +588,7 @@ func (i *instrumenter) writeGobcoFiles(tmpDir string, pkgs []*ast.Package) {
 		writeFile(filepath.Join(tmpDir, "gobco_no_testmain_test.go"), fixPkgname(noTestMainTemplate))
 	}
 
-	i.writeGobcoBlackBox(pkgs, tmpDir)
+	i.writeGobcoBlackBox(pkgs, srcDir, tmpDir)
 }
 
 func (i *instrumenter) writeGobcoGo(filename, pkgname string) {
@@ -661,35 +613,46 @@ func (i *instrumenter) writeGobcoGo(filename, pkgname string) {
 	writeFile(filename, sb.String())
 }
 
+// findPackagePath finds import path of a package that srcDir indicates
+func findPackagePath(srcDir string) (string, error) {
+	_, moduleRel, err := findInModule(srcDir)
+	if err != nil {
+		return "", err
+	}
+
+	moduleName, err := getModuleName()
+	if err != nil {
+		return "", err
+	}
+
+	if moduleRel == "." {
+		return moduleName, nil
+	} else {
+		pkgPath := fmt.Sprintf("%s/%s", moduleName, moduleRel)
+		return pkgPath, nil
+	}
+}
+
+func getModuleName() (string, error) {
+	cmd := exec.Command("go", "list", "-m")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 // writeGobcoBlackBox makes the function 'GobcoCover' available
 // to black box tests (those in 'package x_test' instead of 'package x')
 // by delegating to the function of the same name in the main package.
-func (i *instrumenter) writeGobcoBlackBox(pkgs []*ast.Package, dstDir string) {
+func (i *instrumenter) writeGobcoBlackBox(pkgs []*ast.Package, srcDir, dstDir string) {
 	if len(pkgs) < 2 {
 		return
 	}
 
-	// Copy the 'import' directive from one of the existing files.
-	pkgName, pkgPath := "", ""
-	for _, pkg := range pkgs {
-		forEachFile(pkg, func(name string, file *ast.File) {
-			for _, imp := range file.Imports {
-				var impName string
-				p, err := strconv.Unquote(imp.Path.Value)
-				ok(err)
-				if imp.Name != nil {
-					impName = imp.Name.Name
-				} else {
-					impName = filepath.Base(p)
-				}
-
-				if impName == pkgs[0].Name {
-					pkgName = impName
-					pkgPath = p
-				}
-			}
-		})
-	}
+	pkgPath, err := findPackagePath(srcDir)
+	ok(err)
+	pkgName := filepath.Base(pkgPath)
 
 	text := "" +
 		"package " + pkgs[0].Name + "_test\n" +
@@ -698,10 +661,6 @@ func (i *instrumenter) writeGobcoBlackBox(pkgs []*ast.Package, dstDir string) {
 		"\n" +
 		"func GobcoCover(idx int, cond bool) bool {\n" +
 		"\t" + "return " + pkgName + ".GobcoCover(idx, cond)\n" +
-		"}\n" +
-		"\n" +
-		"func GobcoFinish(code int) int {\n" +
-		"\t" + "return " + pkgName + ".GobcoFinish(code)\n" +
 		"}\n"
 
 	writeFile(filepath.Join(dstDir, "gobco_bridge_test.go"), text)
@@ -753,7 +712,10 @@ func (gen codeGenerator) typeAssertExpr(x string, typ ast.Expr) ast.Expr {
 
 func (gen codeGenerator) callFinish(arg ast.Expr) ast.Expr {
 	return &ast.CallExpr{
-		Fun:      gen.ident("GobcoFinish"),
+		Fun: &ast.SelectorExpr{
+			X:   gen.ident("gobcoCounts"),
+			Sel: gen.ident("finish"),
+		},
 		Lparen:   gen.pos,
 		Args:     []ast.Expr{arg},
 		Ellipsis: token.NoPos,
@@ -761,12 +723,8 @@ func (gen codeGenerator) callFinish(arg ast.Expr) ast.Expr {
 	}
 }
 
-func (gen codeGenerator) callGobcoCover(idx int, cond ast.Expr, typ types.Type, typePkg *types.Package) ast.Expr {
-	convert := typ != nil && !types.Identical(typ, typ.Underlying())
-	if convert {
-		cond = gen.convert(cond, "bool")
-	}
-	var ret ast.Expr = &ast.CallExpr{
+func (gen codeGenerator) callGobcoCover(idx int, cond ast.Expr) ast.Expr {
+	return &ast.CallExpr{
 		Fun:    gen.ident("GobcoCover"),
 		Lparen: gen.pos,
 		Args: []ast.Expr{
@@ -778,18 +736,6 @@ func (gen codeGenerator) callGobcoCover(idx int, cond ast.Expr, typ types.Type, 
 			cond,
 		},
 		Rparen: gen.pos,
-	}
-	if convert {
-		typename := types.TypeString(typ, types.RelativeTo(typePkg))
-		ret = gen.convert(ret, typename)
-	}
-	return ret
-}
-
-func (gen codeGenerator) convert(x ast.Expr, t string) ast.Expr {
-	return &ast.CallExpr{
-		Fun:  gen.ident(t),
-		Args: []ast.Expr{x},
 	}
 }
 
